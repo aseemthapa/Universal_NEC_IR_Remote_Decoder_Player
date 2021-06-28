@@ -37,9 +37,17 @@
 #define OUT_MASK 8 //For Port B3 (Toggle Output)
 #define GPO_Mask 32 //For port B5 (PWM for LED)
 #define ON_VAL 1053 //For 38kHz wave
+
+// Pushbutton masks:
+#define PB1_MASK 64 //For port D6
+#define PB2_MASK 2  //For port B1
+#define PB3_MASK 16 //For port C4
+#define PB4_MASK 8  //For port D3
+#define PB5_MASK 1  //For port B0
+#define PB6_MASK 4  //For port D2
+
 //Allow a maximum of 32 instructions (each instruct takes 4 blocks) (0-127):
 #define max_Eeprom_addr 128
-
 
 //Using Green LED as sensor when the Program starts:
 
@@ -69,6 +77,11 @@ uint16_t valueD = 0;
 uint8_t global_addr = 0;
 uint8_t global_data = 0;
 
+//Global values for push buttons:
+int global_button_arr[6] = {-1,-1,-1,-1,-1,-1};
+//This array will contain the offset from base address for the pushbutton
+//-1 means the pushbutton has not been assigned to any address
+
 // GLOBAL BOOLEANS/Flags:
 
 //Modulator is the variable that is used to control when to burst and not during address and data transmissions.
@@ -94,12 +107,29 @@ void initHw()
 
     // Enable clocks
     SYSCTL_RCGCTIMER_R |= SYSCTL_RCGCTIMER_R1 | SYSCTL_RCGCTIMER_R2;  //Using Timers 1 and 2
-    SYSCTL_RCGCGPIO_R |= SYSCTL_RCGCGPIO_R0|SYSCTL_RCGCGPIO_R1|SYSCTL_RCGCGPIO_R5; //For Clock on Ports A,B,F
+    SYSCTL_RCGCGPIO_R |= SYSCTL_RCGCGPIO_R0|SYSCTL_RCGCGPIO_R1|SYSCTL_RCGCGPIO_R3|SYSCTL_RCGCGPIO_R2|SYSCTL_RCGCGPIO_R5; //For Clock on Ports A,B,C,D,F
     SYSCTL_RCGCPWM_R |= SYSCTL_RCGCPWM_R0;  //PWM0 clock
     _delay_cycles(3);
 
     // Configure pins
 
+    //PUSHBUTTONS:
+    //Set Pushbuttons as Input:
+    GPIO_PORTD_DIR_R &= ~PB1_MASK & ~PB4_MASK & ~PB6_MASK;
+    GPIO_PORTB_DIR_R &= ~PB2_MASK & ~PB5_MASK;
+    GPIO_PORTC_DIR_R &= ~PB3_MASK;
+
+    //Digital enable:
+    GPIO_PORTD_DEN_R |= PB1_MASK | PB4_MASK | PB6_MASK;
+    GPIO_PORTB_DEN_R |= PB2_MASK | PB5_MASK;
+    GPIO_PORTC_DEN_R |= PB3_MASK;
+
+    //Set Pushbuttons as PullUp:;
+    GPIO_PORTD_PUR_R |= PB1_MASK | PB4_MASK | PB6_MASK;
+    GPIO_PORTB_PUR_R |= PB2_MASK | PB5_MASK;
+    GPIO_PORTC_PUR_R |= PB3_MASK;
+
+    //OTHERS:
     //Port A:
     GPIO_PORTA_DIR_R &= ~IN_MASK;  // Port A2 is input
     GPIO_PORTA_DEN_R |= IN_MASK;  // enable pin A2
@@ -558,6 +588,37 @@ void list_rules()
     if (count == 0) putsUart0("No rules implemented.\r\n");
 }
 
+void pb_check()
+{
+    int i = 0;
+    for (i = 0; i < 6; i++)
+    {
+        if (global_button_arr[i] == -1)
+        {
+            putsUart0("PB ");
+            putcUart0(i + 49);
+            putsUart0("=> No entry.\r\n");
+        }
+        else
+        {
+            putsUart0("PB ");
+            putcUart0(i + 49);
+            putsUart0(" detected ");
+            char outstr[12];
+            int k = global_button_arr[i];
+            int j = 0;
+            for (j = 0; j < 12 ; j++)
+            {
+                if ((j%4 == 0) && (j!=0)) k++;
+                outstr[j] = (readEeprom(k) >> (8*(3-(j%4)))) & 0xFF;
+            }
+            putsUart0(" => ");
+            putsUart0(outstr);
+            putsUart0("\r\n");
+        }
+    }
+}
+
 //Initialize/Restore rules array at startup:
 void initRules()
 {
@@ -578,6 +639,35 @@ void initRules()
         else if (rules_for_val == 64) rule_arr[6] = i;
         else if (rules_for_val == 128) rule_arr[7] = i;
     }
+}
+
+//Function to initialize pushbuttons array:
+void initPushbuttons()
+{
+    int i = 0;
+    for (i = 0; i < max_Eeprom_addr; i = i+4)
+    {
+        uint32_t val = readEeprom(i + 3);
+        uint8_t pb_select = (val>>24) & 0x3F; //Only need to check the 6 bits the 7th bit is empty 8th bit is valid bit
+        if (pb_select == 1) global_button_arr[0] = i;
+        else if (pb_select == 2) global_button_arr[1] = i;
+        else if (pb_select == 4) global_button_arr[2] = i;
+        else if (pb_select == 8) global_button_arr[3] = i;
+        else if (pb_select == 16) global_button_arr[4] = i;
+        else if (pb_select == 32) global_button_arr[5] = i;
+    }
+}
+
+//Function to check if a pushbutton is assigned:
+int check_for_pb(uint8_t address)
+{
+    int i = 0;
+    for (i = 0; i< 6; i++)
+    {
+        //Return rule no if address has a rule:
+        if (global_button_arr[i] == address) return i;
+    }
+    return -1; //-1 when address does not have rule
 }
 
 //Function for playing rules:
@@ -712,6 +802,9 @@ int main(void)
 
     //Initialize the Rules array:
     initRules();
+
+    //Initialize pushbuttons array:
+    initPushbuttons();
 
     //Device ON sequence:
     GREEN_LED = 1;
@@ -862,12 +955,72 @@ int main(void)
                     //1 denotes the command is valid/not deleted (in 31st bit):
                     Eeprom_line_in = (1 << 31) + (valueA << 8) + valueD;
                     writeEeprom(Eeprom_addr, Eeprom_line_in);
-                    Eeprom_addr++;
+
+                    //STRUCTURE OF EEPROM DATA:
+                    // BLOCK 1: Four chars (for name)
+                    // BLOCK 2: Four chars (for name)
+                    // BLOCK 3: Four chars (for name)
+                    // BLOCK 4: bit 31 -> valid bit, bit 30 -> unused, bits 29 - 24 -> pusbutton select
+                    // BLOCK 4: bits 16 - 23 -> rule select, bits 0 - 7 -> Data bits, bits 8 - 15 -> Address bits
 
                     //Display message to state command learned
                     putsUart0("learned command: ");
                     putsUart0(input_name);
                     putsUart0("\r\n");
+
+                    //check for the second part of learn command to check for pushbutton set
+                    int pb_val = getFieldInteger(&data, 2);
+                    if (pb_val != 0 && pb_val < 7)
+                    {
+                        putsUart0("Got Pushbutton rule no ");
+                        putcUart0(pb_val + 48);
+                        putsUart0("\r\n");
+
+                        //check if PB rule is empty:
+                        if (global_button_arr[pb_val - 1] == -1)
+                        {
+                            //add rule to Eeprom memory
+                            //23 added because pb_rules start from 1-6 so to get the
+                            //first position (ie, 24) you need to add 23 to the first PB rule (ie, 1)
+                            Eeprom_line_in = Eeprom_line_in + (1 << (23 + pb_val));
+                            writeEeprom(Eeprom_addr, Eeprom_line_in);
+
+                            //The Eeprom_addr currently points to the 4th block
+                            //subtracting by 3 makes it point to the header of the 4 blocks
+                            //eg: for blocks 0,1,2,3 the 4th block is 3 so the header is 3-3 = 0
+                            global_button_arr[pb_val - 1] = Eeprom_addr - 3;
+                            putsUart0("PB Rule set successful.\r\n");
+                        }
+
+                        //if rule is not empty:
+                        else
+                        {
+                            putsUart0("Another command has this Pushbutton. Overwrite(y/n) => ");
+                            char pb_ch = getcUart0();
+                            if (pb_ch == 'y' || pb_ch == 'Y')
+                            {
+                                //To overwrite first erase the rule from previous holder:
+                                uint32_t val = readEeprom(global_button_arr[pb_val - 1] + 3);
+                                val = val - (1 << (23 + pb_val));
+                                writeEeprom(global_button_arr[pb_val - 1] + 3 , val);
+
+                                //Now set the PB rule to new command:
+                                Eeprom_line_in = Eeprom_line_in + (1 << (23 + pb_val));
+                                writeEeprom(Eeprom_addr, Eeprom_line_in);
+                                global_button_arr[pb_val - 1] = Eeprom_addr - 3;
+                                putsUart0("PB Rule set successful.\r\n");
+                            }
+                            else
+                            {
+                                putsUart0("Did not overwrite.\r\n");
+                            }
+                        }
+
+                    }
+                    else
+                    {
+                        putsUart0("Invalid value for pushbutton. Has to be between 1-6.\r\n");
+                    }
                     play_Good_alert();
                 }
             }
@@ -882,6 +1035,10 @@ int main(void)
             if ((attrb[0] == 'r') && (attrb[1] == 'u') && (attrb[2] == 'l') && (attrb[3] == 'e') && (attrb[4] == 's'))
             {
                 list_rules();
+            }
+            else if ((attrb[0] == 'p') && (attrb[1] == 'b'))
+            {
+                pb_check();
             }
             //Condition for correct syntax:
             else if (attrb[0] == '\0')
@@ -939,6 +1096,14 @@ int main(void)
                     val = val - (1<<(rule_no + 16));
                     writeEeprom(chk + 3, val);
                 }
+
+                int pb_no = check_for_pb(chk);
+                //Now check if any PB rule is set:
+                if (pb_no >= 0)
+                {
+                    global_button_arr[pb_no] = -1;
+                }
+
                 //Write everything to be null:
                 writeEeprom(chk,0);
                 writeEeprom(chk + 1,0);
@@ -979,6 +1144,12 @@ int main(void)
                 }
                 //clear the rules array:
                 clearRules();
+                //clear the pushbuttons array:
+                c = 0;
+                for (c = 0; c < 6; c++)
+                {
+                    global_button_arr[c] = -1;
+                }
                 putsUart0("Cleared Eeprom.\r\n");
             }
             else
@@ -1000,8 +1171,36 @@ int main(void)
                 putsUart0(" Data: ");
                 putint8Uart0((readEeprom(chk + 3)) & 0xFF);
                 putsUart0("\r\n");
+
+                //Now check for rules:
+                putsUart0("Rule set => ");
+                int rule_no = check_for_rule(chk);
+                //If address/NAME has a rule delete it:
+                if (rule_no >= 0)
+                {
+                    ruleDescription(rule_no);
+                }
+                else
+                {
+                    putsUart0("None.");
+                }
+                putsUart0("\r\n");
+
+                //Now check for any pushbutton rules
+                putsUart0("Pushbutton set => ");
+                int pb_no = check_for_pb(chk);
+                if (pb_no >= 0)
+                {
+                    putcUart0(pb_no + 49);
+                }
+                else
+                {
+                    putsUart0("None.");
+                }
+                putsUart0("\r\n");
                 play_Good_alert();
             }
+
             //This means input name was not string
             else if(chk == -1)
             {
@@ -1152,11 +1351,99 @@ int main(void)
             }
         }
 
+        //10) Remote Command:
+        else if (isCommand(&data,"remote",0))
+        {
+            //Store the second argument 'd' means decode ON.
+            char decode = getFieldString(&data,1)[0];
+
+            putsUart0("ENTERING REMOTE MODE. CHECKING Validity of all pushbuttons.\r\n");
+            int i = 0;
+            bool chk = true;
+            for (i=0; i<6; i++)
+            {
+                if (global_button_arr[i] == -1)
+                {
+                    chk = false; //smoking gun
+                    i = 6; //exit loop
+                }
+            }
+            if (chk)
+            {
+                putsUart0("Remote mode entered. To exit press reset on controller.\r\n");
+                if (decode == 'd') putsUart0("Decode mode turned ON.\r\n");
+                else putsUart0("Decode mode turned OFF.\r\n");
+                while(true)
+                {
+                    int index = -1;
+                    if (!(GPIO_PORTD_DATA_R & PB1_MASK))
+                    {
+                        index = 0;
+                        GREEN_LED = 1;
+                        waitMicrosecond(500000); //500 ms
+                        GREEN_LED = 0;
+                    }
+                    else if (!(GPIO_PORTB_DATA_R & PB2_MASK))
+                    {
+                        index = 1;
+                        GREEN_LED = 1;
+                        waitMicrosecond(500000); //500 ms
+                        GREEN_LED = 0;
+                    }
+                    else if (!(GPIO_PORTC_DATA_R & PB3_MASK))
+                    {
+                        index = 2;
+                        GREEN_LED = 1;
+                        waitMicrosecond(500000); //500 ms
+                        GREEN_LED = 0;
+                    }
+                    else if (!(GPIO_PORTD_DATA_R & PB4_MASK))
+                    {
+                        index = 3;
+                        GREEN_LED = 1;
+                        waitMicrosecond(500000); //500 ms
+                        GREEN_LED = 0;
+                    }
+                    else if (!(GPIO_PORTB_DATA_R & PB5_MASK))
+                    {
+                        index = 4;
+                        GREEN_LED = 1;
+                        waitMicrosecond(500000); //500 ms
+                        GREEN_LED = 0;
+                    }
+                    else if (!(GPIO_PORTD_DATA_R & PB6_MASK))
+                    {
+                        index = 5;
+                        GREEN_LED = 1;
+                        waitMicrosecond(500000); //500 ms
+                        GREEN_LED = 0;
+                    }
+
+                    if (index != -1)
+                    {
+                        uint8_t command = global_button_arr[index];
+                        uint8_t Addr = ((readEeprom(command + 3))>>8) & 0xFF;
+                        uint8_t Data = (readEeprom(command + 3)) & 0xFF;
+                        if (decode == 'd')
+                        {
+                            decode_ON = 1;
+                        }
+                        playComment(Addr, Data);
+                    }
+                }
+            }
+            else
+            {
+                putsUart0("Some pushbuttons not set. Use list pb to check.\r\n");
+            }
+        }
+
         else
         {
             putsUart0("Unrecognized command.\r\n");
             play_Bad_alert();
         }
+        putsUart0("\r\n");
 
     }
 }
