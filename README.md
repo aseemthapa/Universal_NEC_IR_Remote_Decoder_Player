@@ -9,5 +9,8 @@ Circuit Requirements: <br>
 -> IR LED connected to PWM output. <br>
 -> IR Sensor connected to digital input with interrupt functionality. <br>
 -> Speaker connected to PWM output. <br>
+
+New additions: <br>
+-> Added 'remote' function that allows the user to operate on a remote mode with the GPIO buttons. <br>
  
 
